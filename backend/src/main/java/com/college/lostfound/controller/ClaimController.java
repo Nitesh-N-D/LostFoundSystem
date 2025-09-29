@@ -1,51 +1,58 @@
 package com.college.lostfound.controller;
 
 import com.college.lostfound.model.Claim;
+import com.college.lostfound.model.Item;
+import com.college.lostfound.model.User;
 import com.college.lostfound.repository.ClaimRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
+import com.college.lostfound.service.ItemService;
+import com.college.lostfound.service.UserService;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
+import java.time.LocalDateTime;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/claims")
-@CrossOrigin
 public class ClaimController {
+    private final ClaimRepository claimRepo;
+    private final ItemService itemService;
+    private final UserService userService;
 
-    private final ClaimRepository repo;
-
-    @Autowired
-    private JavaMailSender mailSender;
-
-    public ClaimController(ClaimRepository repo) {
-        this.repo = repo;
+    public ClaimController(ClaimRepository claimRepo, ItemService itemService, UserService userService){
+        this.claimRepo = claimRepo;
+        this.itemService = itemService;
+        this.userService = userService;
     }
 
-    @PostMapping
-    public Claim create(@RequestBody Claim claim) {
-        claim.setStatus("PENDING");
-        return repo.save(claim);
+    @PostMapping("/request")
+    public ResponseEntity<?> requestClaim(@RequestBody Map<String,String> body){
+        Long itemId = Long.parseLong(body.get("itemId"));
+        String claimerEmail = body.get("claimerEmail");
+        String note = body.getOrDefault("note","");
+
+        Item item = itemService.get(itemId).orElse(null);
+        User claimer = userService.findByEmail(claimerEmail).orElse(null);
+        if(item==null) return ResponseEntity.badRequest().body(Map.of("error","Item not found"));
+        if(claimer==null) return ResponseEntity.badRequest().body(Map.of("error","User not found"));
+
+        Claim c = Claim.builder()
+                .item(item)
+                .claimer(claimer)
+                .status("PENDING")
+                .note(note)
+                .createdAt(LocalDateTime.now())
+                .build();
+        claimRepo.save(c);
+        return ResponseEntity.ok(Map.of("message","claim requested", "claim", c));
     }
 
-    @PutMapping("/{id}/approve")
-    public Claim approve(@PathVariable Long id) {
-        Claim claim = repo.findById(id).orElseThrow();
-        claim.setStatus("APPROVED");
-
-        // Send email
-        SimpleMailMessage msg = new SimpleMailMessage();
-        msg.setTo(claim.getClaimer().getEmail());
-        msg.setSubject("Claim Approved");
-        msg.setText("Your claim for item '" + claim.getItem().getTitle() + "' is approved.");
-        mailSender.send(msg);
-
-        return repo.save(claim);
-    }
-
-    @GetMapping
-    public List<Claim> all() {
-        return repo.findAll();
+    @PostMapping("/update/{id}")
+    public ResponseEntity<?> updateStatus(@PathVariable Long id, @RequestBody Map<String,String> body){
+        return claimRepo.findById(id).map(c -> {
+            c.setStatus(body.getOrDefault("status", c.getStatus()));
+            claimRepo.save(c);
+            return ResponseEntity.ok(Map.of("message","updated","claim",c));
+        }).orElse(ResponseEntity.notFound().build());
     }
 }
